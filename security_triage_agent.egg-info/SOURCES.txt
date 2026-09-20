@@ -1,6 +1,0 @@
-pyproject.toml
-security_triage_agent.egg-info/PKG-INFO
-security_triage_agent.egg-info/SOURCES.txt
-security_triage_agent.egg-info/dependency_links.txt
-security_triage_agent.egg-info/requires.txt
-security_triage_agent.egg-info/top_level.txt

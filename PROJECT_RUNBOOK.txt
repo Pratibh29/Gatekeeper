@@ -1,0 +1,539 @@
+SECURITY TRIAGE AGENT PROJECT RUNBOOK
+======================================
+
+Purpose
+-------
+This project is a GitHub Pull Request security triage service. It receives a
+GitHub pull_request webhook, clones the exact PR commit from the target
+repository, runs security scanners, correlates findings with changed-file
+reachability, and publishes one security report comment plus a GitHub result.
+
+There are two repositories in the real integration:
+
+1. Gatekeeper
+   Repository: Pratibh29/Gatekeeper
+   This repository contains the scanner service, webhook server, tools, and
+   triage logic. It runs locally with Uvicorn and is exposed using ngrok.
+
+2. Target repository
+   Repository: Pratibh29/Suicide_Data_Analysis
+   Pull Requests in this repository trigger the Gatekeeper webhook. Gatekeeper
+   clones this repository at the PR head commit and scans that temporary copy.
+
+The Gatekeeper repository is not cloned for each scan. It is already running
+locally. The target repository is cloned because the scanner must inspect the
+exact source code and dependency files from the Pull Request commit.
+
+
+Architecture and execution flow
+-------------------------------
+
+GitHub Pull Request
+        |
+        v
+GitHub webhook sends pull_request.opened or pull_request.synchronize
+        |
+        v
+ngrok public HTTPS URL
+        |
+        v
+FastAPI endpoint: POST /webhook/github
+        |
+        +-- validates X-Hub-Signature-256 using HMAC-SHA256
+        |
+        +-- immediately returns {"status": "accepted"}
+        |
+        v
+Background processing
+        |
+        +-- fetches changed files using GitHub API
+        +-- clones target repository PR head commit into a temp directory
+        +-- runs Semgrep, Gitleaks, and OSV concurrently
+        +-- correlates findings with changed-file reachability
+        +-- classifies findings as P1, P2, or P3
+        +-- renders one Markdown security report
+        +-- posts the report as a PR comment
+        +-- publishes a Check Run or commit status
+        +-- removes the temporary clone
+
+The service is fail-closed. A scanner failure or skipped dependency scan is
+reported and blocks the result rather than being treated as a clean scan.
+
+
+Main security tools
+-------------------
+
+1. Semgrep
+   Purpose: Static application security testing (SAST).
+   Input: Target repository path.
+   Command pattern: semgrep --config auto --json <repo_path>
+   Output: Rule ID, path, line, severity, message, CWE, fingerprint.
+   Exit code 0 means no findings. Exit code 1 means findings were found and is
+   treated as a successful scan. Other exit codes are scanner failures.
+
+2. Gitleaks
+   Purpose: Detect secrets, tokens, and credentials in repository files.
+   Input: Target repository path.
+   Output: Rule ID, truncated match, file, line, description, tags.
+   Secret matches are truncated to 50 characters by the tool. Full secret
+   values must not be sent to logs or LLM context.
+
+3. OSV.dev
+   Purpose: Check Python dependencies for known vulnerabilities.
+   Input: requirements.txt or pyproject.toml.
+   Operation: Sends a batch query to https://api.osv.dev/v1/querybatch.
+   Output: Package name, installed version, CVE/advisory ID, summary, CVSS
+   score when available, and fixed versions.
+   If no dependency file exists, the scan is marked CVE SKIPPED and the result
+   fails closed.
+
+4. Reachability tool
+   Purpose: Reduce noise by checking whether a finding is related to changed
+   files in the PR.
+   HIGH: Finding file is in the PR changed-file list.
+   MEDIUM: A changed file directly imports or references the finding module.
+   LOW: No direct evidence was found. LOW never means safe; manual review is
+   recommended.
+   The tool normalizes temporary clone paths against the repository root so
+   absolute scanner paths match GitHub's relative changed-file paths.
+
+
+Packages and dependencies
+-------------------------
+
+Runtime packages in pyproject.toml:
+
+- mcp: FastMCP server and MCP tool registration.
+- openai-agents: Optional OpenAI Agents SDK extension points.
+- groq: Optional Groq runtime client.
+- python-dotenv: Loads values from the local .env file.
+- fastapi: Webhook HTTP application.
+- uvicorn: ASGI server used to run FastAPI.
+- httpx: HTTP client used for OSV.dev calls and local webhook testing.
+- pygithub: GitHub repository, PR, comment, and status API access.
+- langfuse: Optional tracing and observability.
+- pydantic: Structured models for scanner results and reports.
+- deepeval: Optional evaluation dependency.
+
+Development packages:
+
+- pytest: Test runner.
+- pytest-asyncio: Async test support.
+- pytest-cov: Coverage reporting.
+- ruff: Linting.
+- mypy: Optional type checking.
+
+External executables:
+
+- Semgrep: Installed with pip or available through the project executable
+  resolver.
+- Gitleaks: Installed as a binary. The repository can resolve the bundled
+  tools/bin/gitleaks.exe when available.
+- Git: Required for cloning the target PR.
+- ngrok: Required to expose the local FastAPI server to GitHub.
+
+
+Important project files
+-----------------------
+
+mcp_server/server.py
+    Starts the FastMCP server and registers the four security tools.
+
+mcp_server/tools/dep_parser.py
+    Parses requirements.txt and pyproject.toml dependency declarations.
+
+mcp_server/tools/semgrep_tool.py
+    Runs Semgrep and maps JSON output into Pydantic models.
+
+mcp_server/tools/gitleaks_tool.py
+    Runs Gitleaks and truncates secret matches.
+
+mcp_server/tools/osv_tool.py
+    Queries OSV.dev and creates CVE vulnerability models.
+
+mcp_server/tools/reachability_tool.py
+    Performs same-file and direct-import reachability checks.
+
+triage_agents/orchestrator.py
+    Runs SAST, secrets, and CVE scans concurrently using asyncio.to_thread and
+    asyncio.gather. It then calls correlation and reporting logic.
+
+triage_agents/correlator.py
+    Enriches findings with reachability and priority information.
+
+triage_agents/priority.py
+    Applies P1/P2/P3 classification rules.
+
+triage_agents/reporter_agent.py
+    Produces the deterministic Markdown PR comment.
+
+webhook/app.py
+    Validates webhook signatures, accepts Pull Request events, runs background
+    processing, posts comments, and publishes Check Runs or commit statuses.
+
+webhook/repo_cloner.py
+    Clones the target repository at the PR head SHA into a temporary directory
+    and always deletes the clone afterward.
+
+webhook/get_pr_files.py
+    Retrieves the changed-file list from GitHub.
+
+webhook/github_client.py
+    Posts PR comments, Check Runs, or commit statuses.
+
+state/dedup_store.py
+    Stores finding fingerprints in SQLite to avoid duplicate comments.
+
+observability/tracing.py
+    Optional Langfuse tracing. Disabled unless LANGFUSE_TRACING_ENABLED=true.
+
+tests/
+    Unit, integration, scanner, reachability, pipeline, and local webhook tests.
+
+
+Priority and blocking logic
+---------------------------
+
+P1:
+- Secret findings in the PR are P1.
+- ERROR SAST findings with HIGH or MEDIUM reachability are P1 when they match
+  security categories such as command injection, SQL injection, hardcoded
+  secret, RCE, or authentication bypass.
+- Critical CVEs with sufficient reachability can be P1.
+
+P2:
+- High-severity findings with LOW reachability.
+- Warning findings with reachable evidence.
+- Medium CVSS findings.
+
+P3:
+- Low-severity or low-confidence findings that do not meet P1/P2 conditions.
+
+The overall result blocks when:
+
+- At least one P1 finding exists, or
+- A scanner fails, or
+- The dependency scan is skipped because no dependency file exists.
+
+With GITHUB_CHECKS_ENABLED=false, the service publishes a commit status. With
+GITHUB_CHECKS_ENABLED=true, it attempts to publish a GitHub Check Run.
+
+
+Environment setup
+------------------
+
+Create this file only on the local Gatekeeper machine:
+
+C:\Users\DELL\Desktop\Github-Security-Gatekeeper\.env
+
+Never commit or upload .env. It is already ignored by .gitignore.
+
+Use placeholder values like these:
+
+GROQ_API_KEY=your_new_groq_key
+GITHUB_TOKEN=your_new_github_token
+GITHUB_WEBHOOK_SECRET=your_new_webhook_secret
+LANGFUSE_SECRET_KEY=optional_langfuse_secret
+LANGFUSE_PUBLIC_KEY=optional_langfuse_public_key
+LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_TRACING_ENABLED=false
+GITHUB_CHECKS_ENABLED=false
+
+The GitHub fine-grained token should have access to the target repository and
+these permissions:
+
+- Contents: Read
+- Metadata: Read
+- Issues: Read and write
+- Pull requests: Read and write
+- Commit statuses: Read and write
+
+Issues write permission is required for PR issue comments. Commit statuses write
+permission is required when GITHUB_CHECKS_ENABLED=false. Checks write is only
+needed when using Check Runs with GITHUB_CHECKS_ENABLED=true.
+
+All credentials previously pasted into chat, logs, screenshots, or commits
+must be revoked and regenerated.
+
+
+Initial Gatekeeper installation
+--------------------------------
+
+Open PowerShell and run:
+
+cd C:\Users\DELL\Desktop\Github-Security-Gatekeeper
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+
+Install or verify external tools:
+
+semgrep --version
+gitleaks version
+git --version
+
+If the standalone commands are not on PATH, the project tool resolvers may use
+.venv or tools/bin. Docker installs the scanners in the container image.
+
+Run local automated tests:
+
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\ruff.exe check .
+
+Expected result at the time this runbook was written:
+
+14 passed
+All checks passed!
+
+
+Start Gatekeeper and ngrok
+--------------------------
+
+Terminal 1: start the FastAPI webhook server.
+
+cd C:\Users\DELL\Desktop\Github-Security-Gatekeeper
+.\.venv\Scripts\python.exe -m uvicorn webhook.app:app --reload --port 8000
+
+Expected output includes:
+
+Uvicorn running on http://127.0.0.1:8000
+Application startup complete.
+
+Terminal 2: expose port 8000 to GitHub.
+
+ngrok http 8000
+
+Copy the HTTPS forwarding URL, for example:
+
+https://example.ngrok-free.app
+
+The GitHub webhook URL is:
+
+https://example.ngrok-free.app/webhook/github
+
+Keep both terminals running.
+
+
+Configure the GitHub webhook
+-----------------------------
+
+In the target repository:
+
+Settings -> Webhooks -> Add webhook
+
+Set:
+
+Payload URL:
+    https://example.ngrok-free.app/webhook/github
+
+Content type:
+    application/json
+
+Secret:
+    exactly the same value as GITHUB_WEBHOOK_SECRET in local .env
+
+Events:
+    Let me select individual events -> Pull requests
+
+Save the webhook. The GitHub delivery page should show successful HTTP 200
+when Gatekeeper receives an event. HTTP 200 only proves webhook receipt; the
+Uvicorn terminal must also be checked for background processing errors.
+
+
+Test case 1: vulnerable PR that must block
+-------------------------------------------
+
+This test uses the target repository, not the Gatekeeper repository.
+
+Clone the target repository once:
+
+cd C:\Users\DELL\Desktop
+git clone https://github.com/Pratibh29/Suicide_Data_Analysis.git
+cd Suicide_Data_Analysis
+
+Create a branch from the target main branch:
+
+git checkout main
+git pull origin main
+git checkout -b security-agent-test
+
+Create security_test.py:
+
+@"
+import subprocess
+
+def run_command(user_input):
+    subprocess.run(user_input, shell=True)
+"@ | Set-Content security_test.py
+
+Commit and push:
+
+git add security_test.py
+git commit -m "Add security scanner test"
+git push -u origin security-agent-test
+
+Open a Pull Request:
+
+Base branch: main
+Compare branch: security-agent-test
+
+Expected result:
+
+- Webhook delivery: HTTP 200.
+- Semgrep finds shell=True.
+- Finding path is normalized to security_test.py.
+- Reachability is HIGH because the file changed in the PR.
+- Finding is classified P1.
+- PR comment says MERGE BLOCKED.
+- Commit status is failure.
+
+If the branch already exists and the PR is open, push a new harmless commit to
+trigger pull_request.synchronize instead of creating another PR.
+
+
+Test case 2: clean PR that should pass
+---------------------------------------
+
+Do not create the clean branch from security-agent-test because that branch
+contains the vulnerable test file. Start from target main:
+
+git checkout main
+git pull origin main
+git checkout -b clean-security-test
+
+Create a dependency file so the CVE scan runs instead of being skipped:
+
+Set-Content requirements.txt "requests==2.32.3"
+
+Add a harmless README change:
+
+Add-Content README.md "`nClean security pipeline test."
+
+Review the files:
+
+git status
+
+Commit and push:
+
+git add README.md requirements.txt
+git commit -m "Test clean security pull request"
+git push -u origin clean-security-test
+
+Open a Pull Request:
+
+Base branch: main
+Compare branch: clean-security-test
+
+Expected result:
+
+- Webhook delivery: HTTP 200.
+- No Semgrep P1 findings.
+- No Gitleaks findings.
+- OSV dependency scan runs.
+- No scan failures.
+- PR comment says PR PASSES.
+- Commit status is success.
+
+OSV may still report low-priority P3 advisories for a dependency. A P3 finding
+alone does not block the PR. Review advisories before using the dependency in
+production.
+
+
+Deduplication behavior
+----------------------
+
+Finding fingerprints are stored in data/dedup.db. The data directory is local
+runtime state and is ignored by Git.
+
+If you need to repeat a test and force the same finding to be commented again:
+
+cd C:\Users\DELL\Desktop\Github-Security-Gatekeeper
+Remove-Item .\data\dedup.db -ErrorAction SilentlyContinue
+
+Restart Uvicorn and trigger another PR synchronize event.
+
+Normally, do not delete this database in production because it prevents repeat
+comments for the same finding, repository, and PR.
+
+
+How to inspect a test
+---------------------
+
+1. Watch the Uvicorn terminal.
+2. Confirm GitHub webhook Recent Deliveries shows pull_request.opened or
+   pull_request.synchronize with HTTP 200.
+3. Inspect the target PR comment.
+4. Inspect the latest commit status named Security Triage Agent.
+5. Check for Python tracebacks in the Uvicorn terminal.
+6. Confirm the PR result matches the expected vulnerable or clean scenario.
+
+A green webhook delivery alone is not enough. It only means GitHub delivered
+HTTP request data. The background scanner and GitHub API operations must also
+complete successfully.
+
+
+Troubleshooting
+---------------
+
+401 Invalid webhook signature
+    The GitHub webhook secret and local GITHUB_WEBHOOK_SECRET do not match.
+
+403 Resource not accessible by personal access token
+    The token lacks Issues write or Pull requests write permission, the token
+    cannot access the selected repository, or organization SSO approval is
+    missing.
+
+422 Description is too long
+    Commit status descriptions must be no longer than 140 characters. The
+    current code truncates the complete description to that limit.
+
+No PR comment
+    Check the Uvicorn terminal for GitHub API errors. Confirm Issues and Pull
+    requests write permissions. Check that the token belongs to a user with
+    write access to the target repository.
+
+CVE SKIPPED
+    The target PR does not contain requirements.txt or pyproject.toml. Add one
+    if the dependency scan must run. The service fails closed by design.
+
+Only HTTP 200 appears in Uvicorn
+    This is normal for webhook receipt. Background work may be quiet on
+    success. Check the PR comment, commit status, and any later traceback.
+
+Semgrep finding marked LOW unexpectedly
+    Confirm the finding file is changed in the PR. The current implementation
+    normalizes temporary clone paths against the cloned repository root.
+
+ngrok URL changed
+    Update the GitHub webhook Payload URL with the new HTTPS forwarding URL.
+
+
+Local webhook unit/integration test
+------------------------------------
+
+The repository includes tests/test_webhook_e2e.py. It sends a signed HTTP
+request to the FastAPI app using an in-process ASGI transport. GitHub API calls,
+cloning, and the pipeline are mocked at their external boundaries, while the
+real route, signature validation, background task, payload extraction, comment
+path, and result path are exercised.
+
+Run it with:
+
+.\.venv\Scripts\python.exe -m pytest tests/test_webhook_e2e.py -q
+
+This is different from the real GitHub test. The real test additionally proves
+PAT permissions, GitHub webhook delivery, ngrok networking, GitHub comments,
+and GitHub commit statuses.
+
+
+Security rules
+--------------
+
+- Never commit .env.
+- Never paste tokens into chat, screenshots, issues, or Pull Requests.
+- Rotate any credential that was exposed.
+- Use fake test secrets only in security_test.py.
+- Gitleaks truncates matches, but do not assume test secrets are harmless if
+  they resemble real credentials.
+- Keep the webhook secret identical between GitHub and local .env.
+- Use a least-privilege token limited to the target repository.
