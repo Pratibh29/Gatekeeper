@@ -54,14 +54,22 @@ def correlate_findings(
     cve_findings: list[CVEVulnerability] | list[dict],
     changed_files: list[str],
     scan_failures: list[str] | None = None,
+    repo_root: str | None = None,
 ) -> CorrelationReport:
     """Deterministic correlator implementing the severity rubric (fail-closed)."""
     enriched: list[EnrichedFinding] = []
 
     for raw in sast_findings:
         finding = raw if isinstance(raw, SemgrepFinding) else SemgrepFinding.model_validate(raw)
+        if repo_root and Path(finding.path).is_absolute():
+            try:
+                finding = finding.model_copy(
+                    update={"path": str(Path(finding.path).resolve().relative_to(Path(repo_root).resolve()))}
+                )
+            except ValueError:
+                pass
         reachability = check_reachability(
-            finding.path, finding.check_id, finding.line, changed_files
+            finding.path, finding.check_id, finding.line, changed_files, repo_root
         )
         enriched.append(enrich_sast(finding, reachability))
 
@@ -107,6 +115,7 @@ def findings_from_scan_results(
     secrets: GitleaksResult | BaseException | None,
     cves: CVEResult | BaseException | None,
     changed_files: list[str],
+    repo_root: str | None = None,
 ) -> CorrelationReport:
     failures: list[str] = []
     sast_findings: list[SemgrepFinding] = []
@@ -129,5 +138,5 @@ def findings_from_scan_results(
         cve_findings = cves.vulnerabilities
 
     return correlate_findings(
-        sast_findings, secret_findings, cve_findings, changed_files, failures
+        sast_findings, secret_findings, cve_findings, changed_files, failures, repo_root
     )

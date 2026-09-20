@@ -45,8 +45,16 @@ def check_reachability(
     finding_check_id: str = "",
     finding_line: int = 0,
     changed_files: list[str] | None = None,
+    repo_root: str | None = None,
 ) -> ReachabilityResult:
     changed_files = changed_files or []
+    root = Path(repo_root).resolve() if repo_root else None
+    finding = Path(finding_path)
+    if root and finding.is_absolute():
+        try:
+            finding_path = str(finding.resolve().relative_to(root))
+        except ValueError:
+            pass
     normalized_changed = {_normalize(item) for item in changed_files}
     if _normalize(finding_path) in normalized_changed:
         return ReachabilityResult(
@@ -59,6 +67,8 @@ def check_reachability(
     needles = _module_needles(finding_path)
     for changed in changed_files:
         path = Path(changed)
+        if root and not path.is_absolute():
+            path = root / path
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")

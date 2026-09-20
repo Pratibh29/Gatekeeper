@@ -26,7 +26,8 @@ def render_report(report: CorrelationReport) -> str:
     lines = [
         "## Security Scan Summary",
         "",
-        "**Status:** " + ("MERGE BLOCKED" if report.p1_findings else "PR PASSES"),
+        "**Status:** "
+        + ("MERGE BLOCKED" if report.p1_findings or report.scan_failures else "PR PASSES"),
         "",
         "| Severity | Finding | File | Line | Reachable |",
         "|----------|---------|------|------|-----------|",

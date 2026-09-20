@@ -77,6 +77,7 @@ async def _run_security_pipeline(
         by_name["Secrets"][0],
         by_name["CVE"][0],
         changed_files,
+        repo_path,
     )
     if dependency_file is None:
         report.scan_failures.append("CVE SKIPPED: no requirements.txt or pyproject.toml found")
