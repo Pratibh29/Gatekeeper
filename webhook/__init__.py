@@ -1,0 +1,1 @@
+"""GitHub webhook integration for the security triage pipeline."""

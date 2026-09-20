@@ -1,0 +1,10 @@
+[project]
+name = "sample-app"
+dependencies = [
+    "flask>=1.21.3",
+    "requests==2.28.0",
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+django = "^3.2.0"
