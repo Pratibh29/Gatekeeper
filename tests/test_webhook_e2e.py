@@ -63,6 +63,7 @@ async def test_signed_pull_request_webhook_runs_background_pipeline(
 
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", secret)
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_CHECKS_ENABLED", "true")
     monkeypatch.setattr(
         webhook_module,
         "get_pr_changed_files",

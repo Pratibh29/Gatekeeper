@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 from typing import Any
 
@@ -12,11 +13,16 @@ from state.dedup_store import filter_new_findings, record_findings
 from triage_agents.orchestrator import run_security_pipeline
 from triage_agents.reporter_agent import render_report
 from webhook.get_pr_files import get_pr_changed_files
-from webhook.github_client import create_check_run, create_commit_status, post_pr_comment
+from webhook.github_client import (
+    create_check_run,
+    create_commit_status,
+    post_pr_comment,
+)
 from webhook.repo_cloner import cloned_repo
 
 load_dotenv()
 app = FastAPI(title="Security Triage Agent")
+logger = logging.getLogger(__name__)
 
 
 def validate_github_signature(payload: bytes, sig_header: str) -> bool:
@@ -60,26 +66,33 @@ async def process_pull_request(payload: dict[str, Any]) -> None:
                 "p3_findings": [f for f in result.correlation_report.p3_findings if f in new_findings],
             }
         )
-        post_pr_comment(repo_full_name, pr_number, render_report(new_report))
-        record_findings(new_findings, pr_number, repo_full_name)
+        try:
+            post_pr_comment(repo_full_name, pr_number, render_report(new_report))
+        except Exception:
+            logger.exception("Could not post PR comment")
+        else:
+            record_findings(new_findings, pr_number, repo_full_name)
 
     conclusion = "failure" if result.should_block_merge else "success"
-    if os.getenv("GITHUB_CHECKS_ENABLED", "true").lower() in {"1", "true", "yes"}:
-        create_check_run(
-            repo_full_name,
-            head_sha,
-            conclusion,
-            "Security triage completed",
-            result.pr_comment_markdown,
-        )
-    else:
-        create_commit_status(
-            repo_full_name,
-            head_sha,
-            conclusion,
-            "Security triage completed",
-            result.pr_comment_markdown,
-        )
+    try:
+        if os.getenv("GITHUB_CHECKS_ENABLED", "true").lower() in {"1", "true", "yes"}:
+            create_check_run(
+                repo_full_name,
+                head_sha,
+                conclusion,
+                "Security triage completed",
+                result.pr_comment_markdown,
+            )
+        else:
+            create_commit_status(
+                repo_full_name,
+                head_sha,
+                conclusion,
+                "Security triage completed",
+                result.pr_comment_markdown,
+            )
+    except Exception:
+        logger.exception("Could not publish GitHub result")
 
 
 @app.post("/webhook/github")
