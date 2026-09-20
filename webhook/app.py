@@ -12,7 +12,7 @@ from state.dedup_store import filter_new_findings, record_findings
 from triage_agents.orchestrator import run_security_pipeline
 from triage_agents.reporter_agent import render_report
 from webhook.get_pr_files import get_pr_changed_files
-from webhook.github_client import create_check_run, post_pr_comment
+from webhook.github_client import create_check_run, create_commit_status, post_pr_comment
 from webhook.repo_cloner import cloned_repo
 
 load_dotenv()
@@ -63,13 +63,23 @@ async def process_pull_request(payload: dict[str, Any]) -> None:
         post_pr_comment(repo_full_name, pr_number, render_report(new_report))
         record_findings(new_findings, pr_number, repo_full_name)
 
-    create_check_run(
-        repo_full_name,
-        head_sha,
-        "failure" if result.should_block_merge else "success",
-        "Security triage completed",
-        result.pr_comment_markdown,
-    )
+    conclusion = "failure" if result.should_block_merge else "success"
+    if os.getenv("GITHUB_CHECKS_ENABLED", "true").lower() in {"1", "true", "yes"}:
+        create_check_run(
+            repo_full_name,
+            head_sha,
+            conclusion,
+            "Security triage completed",
+            result.pr_comment_markdown,
+        )
+    else:
+        create_commit_status(
+            repo_full_name,
+            head_sha,
+            conclusion,
+            "Security triage completed",
+            result.pr_comment_markdown,
+        )
 
 
 @app.post("/webhook/github")

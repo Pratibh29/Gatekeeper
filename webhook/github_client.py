@@ -34,3 +34,22 @@ def create_check_run(
         conclusion=conclusion,
         output={"title": title, "summary": summary},
     )
+
+
+def create_commit_status(
+    repo_full_name: str,
+    head_sha: str,
+    conclusion: str,
+    title: str,
+    summary: str,
+) -> None:
+    """Publish the result using the commit-status API when Checks is unavailable."""
+    if conclusion not in {"success", "failure", "neutral"}:
+        raise ValueError(f"Unsupported status conclusion: {conclusion}")
+    state = {"success": "success", "failure": "error", "neutral": "pending"}[conclusion]
+    repo = get_github_client().get_repo(repo_full_name)
+    repo.get_commit(head_sha).create_status(
+        state=state,
+        context="Security Triage Agent",
+        description=f"{title}: {summary[:140]}",
+    )
