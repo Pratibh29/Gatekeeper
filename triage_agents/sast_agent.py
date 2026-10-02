@@ -19,5 +19,6 @@ SAST_AGENT = Agent(
         "Run the Semgrep tool on the supplied repository and return all findings. "
         "Do not interpret, suppress, or correlate findings."
     ),
+    output_type=SemgrepResult,
     tools=[scan_with_semgrep],
 )

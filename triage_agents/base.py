@@ -14,14 +14,17 @@ from openai import AsyncOpenAI
 load_dotenv()
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+_groq_client: AsyncOpenAI | None = None
 
 
 def configure_groq_client() -> AsyncOpenAI:
     """Point the Agents SDK at Groq's OpenAI-compatible Chat Completions API."""
-    client = AsyncOpenAI(
-        api_key=os.getenv("GROQ_API_KEY"),
-        base_url="https://api.groq.com/openai/v1",
-    )
-    set_default_openai_client(client)
+    global _groq_client
+    if _groq_client is None:
+        _groq_client = AsyncOpenAI(
+            api_key=os.getenv("GROQ_API_KEY"),
+            base_url="https://api.groq.com/openai/v1",
+        )
+    set_default_openai_client(_groq_client)
     set_default_openai_api("chat_completions")
-    return client
+    return _groq_client

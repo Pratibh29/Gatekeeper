@@ -19,5 +19,6 @@ CVE_AGENT = Agent(
         "Run the dependency scanner using its batch OSV.dev query. "
         "Return all vulnerabilities without making reachability decisions."
     ),
+    output_type=CVEResult,
     tools=[scan_dependencies],
 )

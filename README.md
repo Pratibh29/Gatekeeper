@@ -9,30 +9,38 @@ PR comment plus a GitHub check run.
 ```mermaid
 flowchart TD
     A[GitHub Pull Request] --> B[FastAPI Webhook]
-    B --> C[Concurrent Scanner Orchestrator]
-    C --> D[Semgrep]
-    C --> E[Gitleaks]
-    C --> F[OSV.dev]
-    D --> G[Fail-closed Correlator]
-    E --> G
-    F --> G
-    G --> H[Reachability Tool]
-    G --> I[Single Markdown Reporter]
-    I --> J[PR Comment and Check Run]
-    G --> K[(SQLite Dedup Store)]
-    C -. optional .-> L[Langfuse]
+    B --> C[OpenAI Agents SDK Orchestrator]
+    C --> D[SAST Agent]
+    C --> E[Secrets Agent]
+    C --> F[CVE Agent]
+    D --> G[Semgrep Tool]
+    E --> H[Gitleaks Tool]
+    F --> I[OSV.dev Tool]
+    G --> J[Correlator Agent]
+    H --> J
+    I --> J
+    J --> K[Reachability Tool]
+    J --> L[Deterministic Report]
+    L --> M[PR Comment and Check Run]
+    B --> N[(SQLite Dedup Store)]
+    C -. optional .-> O[Langfuse]
 ```
 
 ## Current runtime design
 
-The scanner wrappers and correlation/reporting path are deterministic. The
-OpenAI Agents SDK definitions in `triage_agents` are available as extension
-points, but the production path does not ask an LLM to decide whether a merge
-should be blocked. This keeps security decisions reproducible.
+The OpenAI Agents SDK runs the SAST, secrets, and CVE agents concurrently. Each
+agent must call its scanner tool, and the orchestrator uses the tool's structured
+output as the authoritative scan result. The correlator agent receives those
+results, checks SAST reachability with the reachability tool, and classifies
+findings. The orchestrator rejects correlation output that drops findings or
+downgrades deterministic priorities; on agent or validation failure it falls
+back to deterministic correlation.
 
-The system fails closed: a scanner failure or skipped dependency scan blocks
-the check and is shown in the report. LOW reachability confidence means manual
-review, never “safe.” Secret matches are truncated at the Gitleaks tool layer.
+The system fails closed: scanner/agent failures and a missing dependency file
+block the check and appear in the report. A P1 finding also blocks the check.
+LOW reachability confidence means manual review, never “safe.” Secret matches
+are redacted before scanner results are returned to the model. GitHub report
+rendering remains deterministic.
 
 ## Local setup
 
@@ -43,9 +51,10 @@ pip install -e ".[dev]"
 ```
 
 Install Semgrep and Gitleaks, then copy `.env.example` to `.env` and configure
-`GITHUB_TOKEN` and `GITHUB_WEBHOOK_SECRET`. Langfuse is optional; set
-`LANGFUSE_TRACING_ENABLED=true` only when the Langfuse service and keys are
-available.
+`GROQ_API_KEY`, `GITHUB_TOKEN`, and `GITHUB_WEBHOOK_SECRET`. `GROQ_MODEL` is
+optional; it defaults to `openai/gpt-oss-120b`. Langfuse tracing is disabled by
+default; set `LANGFUSE_TRACING_ENABLED=true` only when the Langfuse service and
+keys are available.
 
 Run the tests:
 

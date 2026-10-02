@@ -1,15 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from agents import Agent
-
-from triage_agents.base import GROQ_MODEL
 from triage_agents.models import CorrelationReport, EnrichedFinding
-
-SKILL_CONTENT = (
-    Path(__file__).resolve().parent.parent / "skills" / "security_report.md"
-).read_text(encoding="utf-8")
 
 
 def _row(finding: EnrichedFinding) -> str:
@@ -45,10 +36,3 @@ def render_report(report: CorrelationReport) -> str:
         f"*{report.total_suppressed} findings suppressed as unreachable; manual review is recommended.*",
     ])
     return "\n".join(lines)[:3900]
-
-
-REPORTER_AGENT = Agent(
-    name="Security-Reporter",
-    model=GROQ_MODEL,
-    instructions=f"Render one concise GitHub security comment using this rubric:\n{SKILL_CONTENT}",
-)

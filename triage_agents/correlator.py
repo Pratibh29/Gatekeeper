@@ -20,7 +20,7 @@ def check_finding_reachability(
     finding_line: int,
     changed_files: list[str],
 ) -> ReachabilityResult:
-    """Expose the reachability decision to the optional SDK correlator."""
+    """Expose the reachability decision to the SDK correlator."""
     return check_reachability(finding_path, finding_check_id, finding_line, changed_files)
 
 
@@ -28,8 +28,11 @@ CORRELATOR_AGENT = Agent(
     name="Security-Correlator",
     model=GROQ_MODEL,
     instructions=(
-        "For every finding, use the reachability tool and classify it with the security "
-        "rubric. Be conservative: low confidence requires manual review."
+        "Input is JSON containing complete SAST, secret, and CVE scanner results, changed files, "
+        "repository root, and existing scan failures. Preserve every input finding exactly once; "
+        "never invent or suppress findings. For each SAST finding, use the reachability tool. "
+        "Classify findings using the security rubric and return every scan failure unchanged. "
+        "Be conservative: uncertain reachability requires manual review."
     ),
     output_type=CorrelationReport,
     tools=[check_finding_reachability],

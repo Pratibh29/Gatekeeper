@@ -4,8 +4,11 @@ import asyncio
 import hashlib
 import hmac
 from pathlib import Path
+from types import SimpleNamespace
 
-from mcp_server.tools.gitleaks_tool import GitleaksResult
+from agents import Runner
+
+from mcp_server.tools.gitleaks_tool import GitleaksFinding, GitleaksResult
 from state.dedup_store import filter_new_findings, record_findings
 from triage_agents.models import CorrelationReport, EnrichedFinding
 from triage_agents.orchestrator import run_security_pipeline
@@ -64,17 +67,57 @@ def test_github_signature_requires_exact_payload():
     assert not validate_github_signature(payload, "sha256=invalid")
 
 
-def test_pipeline_blocks_when_scanner_fails(monkeypatch, tmp_path: Path):
-    def fail_sast(_repo_path: str):
-        raise RuntimeError("Semgrep unavailable")
+def test_pipeline_uses_agents_and_preserves_findings_on_agent_failure(monkeypatch, tmp_path: Path):
+    invoked_agents: list[str] = []
+    scanner_tools = {
+        "SAST-Analyst": "scan_with_semgrep",
+        "Secrets-Analyst": "scan_with_gitleaks",
+    }
 
-    monkeypatch.setattr("triage_agents.orchestrator.run_semgrep", fail_sast)
-    monkeypatch.setattr(
-        "triage_agents.orchestrator.run_gitleaks",
-        lambda _repo_path: GitleaksResult(findings=[], scan_time_ms=1),
-    )
+    async def fake_runner(agent, _agent_input: str):
+        invoked_agents.append(agent.name)
+        if agent.name == "SAST-Analyst":
+            raise RuntimeError("Semgrep unavailable")
+        outputs = {
+            "Secrets-Analyst": GitleaksResult(
+                findings=[
+                    GitleaksFinding(
+                        rule_id="generic-api-key",
+                        match="redacted-secret",
+                        file_path="config.py",
+                        line=4,
+                        description="API key",
+                        tags=[],
+                    )
+                ],
+                scan_time_ms=1,
+            ),
+            "Security-Correlator": CorrelationReport(),
+        }
+        tool_name = scanner_tools.get(agent.name)
+        return SimpleNamespace(
+            final_output=outputs[agent.name],
+            new_items=[]
+            if tool_name is None
+            else [
+                SimpleNamespace(type="tool_call_item", tool_name=tool_name, call_id="call-1"),
+                SimpleNamespace(
+                    type="tool_call_output_item",
+                    call_id="call-1",
+                    output=outputs[agent.name],
+                ),
+            ],
+        )
+
+    monkeypatch.setattr("triage_agents.orchestrator.configure_groq_client", lambda: None)
+    monkeypatch.setattr(Runner, "run", fake_runner)
 
     result = asyncio.run(run_security_pipeline(str(tmp_path), ["README.md"]))
 
     assert result.should_block_merge is True
     assert any("SAST FAILED" in failure for failure in result.scan_failures)
+    assert any("CORRELATOR FAILED" in failure for failure in result.scan_failures)
+    assert result.correlation_report.p1_findings[0].title == "generic-api-key"
+    assert "SAST-Analyst" in invoked_agents
+    assert "Secrets-Analyst" in invoked_agents
+    assert "Security-Correlator" in invoked_agents
