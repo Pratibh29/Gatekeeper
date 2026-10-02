@@ -48,9 +48,11 @@ Background processing
         |
         +-- fetches changed files using GitHub API
         +-- clones target repository PR head commit into a temp directory
-        +-- runs Semgrep, Gitleaks, and OSV concurrently
-        +-- correlates findings with changed-file reachability
-        +-- classifies findings as P1, P2, or P3
+        +-- runs SAST, secrets, and CVE agents concurrently
+        +-- each agent invokes its scanner tool and returns structured output
+        +-- correlator agent checks reachability and prioritizes findings
+        +-- orchestrator rejects dropped findings or priority downgrades
+        +-- deterministic correlation is the fail-closed fallback
         +-- renders one Markdown security report
         +-- posts the report as a PR comment
         +-- publishes a Check Run or commit status
@@ -74,9 +76,8 @@ Main security tools
 2. Gitleaks
    Purpose: Detect secrets, tokens, and credentials in repository files.
    Input: Target repository path.
-   Output: Rule ID, truncated match, file, line, description, tags.
-   Secret matches are truncated to 50 characters by the tool. Full secret
-   values must not be sent to logs or LLM context.
+    Output: Rule ID, file, line, description, and tags. Matches are truncated
+    by the scanner wrapper and redacted before results reach the model.
 
 3. OSV.dev
    Purpose: Check Python dependencies for known vulnerabilities.
@@ -103,9 +104,7 @@ Packages and dependencies
 
 Runtime packages in pyproject.toml:
 
-- mcp: FastMCP server and MCP tool registration.
-- openai-agents: Optional OpenAI Agents SDK extension points.
-- groq: Optional Groq runtime client.
+- openai-agents: Runs the scanner and correlator agents.
 - python-dotenv: Loads values from the local .env file.
 - fastapi: Webhook HTTP application.
 - uvicorn: ASGI server used to run FastAPI.
@@ -113,7 +112,6 @@ Runtime packages in pyproject.toml:
 - pygithub: GitHub repository, PR, comment, and status API access.
 - langfuse: Optional tracing and observability.
 - pydantic: Structured models for scanner results and reports.
-- deepeval: Optional evaluation dependency.
 
 Development packages:
 
@@ -121,7 +119,6 @@ Development packages:
 - pytest-asyncio: Async test support.
 - pytest-cov: Coverage reporting.
 - ruff: Linting.
-- mypy: Optional type checking.
 
 External executables:
 
@@ -135,9 +132,6 @@ External executables:
 
 Important project files
 -----------------------
-
-mcp_server/server.py
-    Starts the FastMCP server and registers the four security tools.
 
 mcp_server/tools/dep_parser.py
     Parses requirements.txt and pyproject.toml dependency declarations.
@@ -155,8 +149,8 @@ mcp_server/tools/reachability_tool.py
     Performs same-file and direct-import reachability checks.
 
 triage_agents/orchestrator.py
-    Runs SAST, secrets, and CVE scans concurrently using asyncio.to_thread and
-    asyncio.gather. It then calls correlation and reporting logic.
+    Runs scanner agents concurrently, validates their tool outputs, and
+    invokes the correlator agent with deterministic fail-closed validation.
 
 triage_agents/correlator.py
     Enriches findings with reachability and priority information.
@@ -165,7 +159,8 @@ triage_agents/priority.py
     Applies P1/P2/P3 classification rules.
 
 triage_agents/reporter_agent.py
-    Produces the deterministic Markdown PR comment.
+    Produces the deterministic Markdown PR comment; report generation is not
+    delegated to an LLM.
 
 webhook/app.py
     Validates webhook signatures, accepts Pull Request events, runs background

@@ -93,12 +93,3 @@ def run_gitleaks(repo_path: str) -> GitleaksResult:
         for item in payload
     ]
     return GitleaksResult(findings=findings, scan_time_ms=int((time.time() - start) * 1000))
-
-
-def register_gitleaks_tools(mcp):
-    @mcp.tool()
-    def run_gitleaks_tool(repo_path: str) -> GitleaksResult:
-        """Run Gitleaks and return truncated secret findings."""
-        return run_gitleaks(repo_path)
-
-    return run_gitleaks_tool

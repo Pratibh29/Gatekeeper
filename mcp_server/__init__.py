@@ -1,1 +1,1 @@
-"""Security triage MCP package."""
+"""Security scanner implementations used by the triage agents."""

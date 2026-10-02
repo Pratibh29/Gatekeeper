@@ -112,12 +112,3 @@ def check_dependencies_for_cves(requirements_file_path: str) -> CVEResult:
         packages_checked=len(packages),
         scan_time_ms=int((time.time() - start) * 1000),
     )
-
-
-def register_osv_tools(mcp):
-    @mcp.tool()
-    def check_dependencies_for_cves_tool(requirements_file_path: str) -> CVEResult:
-        """Check a dependency file for CVEs via OSV.dev."""
-        return check_dependencies_for_cves(requirements_file_path)
-
-    return check_dependencies_for_cves_tool

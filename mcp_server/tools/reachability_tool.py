@@ -89,17 +89,3 @@ def check_reachability(
         method="no_evidence_found",
         evidence="No direct import found; manual review recommended",
     )
-
-
-def register_reachability_tools(mcp):
-    @mcp.tool()
-    def check_reachability_tool(
-        finding_path: str,
-        finding_check_id: str = "",
-        finding_line: int = 0,
-        changed_files: list[str] | None = None,
-    ) -> ReachabilityResult:
-        """Assess whether a finding looks reachable from the PR diff."""
-        return check_reachability(finding_path, finding_check_id, finding_line, changed_files)
-
-    return check_reachability_tool

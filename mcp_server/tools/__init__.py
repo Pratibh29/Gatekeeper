@@ -1,1 +1,1 @@
-"""MCP security tools package."""
+"""Security scanner and reachability tools."""

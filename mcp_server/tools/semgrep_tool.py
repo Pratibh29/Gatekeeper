@@ -103,12 +103,3 @@ def run_semgrep(repo_path: str, rules: str = "p/security-audit") -> SemgrepResul
         scan_time_ms=int((time.time() - start) * 1000),
         rule_count=len(data.get("rules", [])),
     )
-
-
-def register_semgrep_tools(mcp):
-    @mcp.tool()
-    def run_semgrep_tool(repo_path: str, rules: str = "p/security-audit") -> SemgrepResult:
-        """Runs Semgrep static analysis on a code repository."""
-        return run_semgrep(repo_path, rules)
-
-    return run_semgrep_tool
